@@ -590,6 +590,12 @@ extern __attribute__((cold)) int ksu_handle_sys_read(unsigned int fd,
 				char __user **buf_ptr, size_t *count_ptr);
 #endif
 
+#ifdef CONFIG_KSU_SUSFS
+extern bool ksu_vfs_read_hook __read_mostly;
+extern __attribute__((cold)) int ksu_handle_sys_read(unsigned int fd,
+			char __user **buf_ptr, size_t *count_ptr);
+#endif
+
 SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 {
 	struct fd f = fdget_pos(fd);
@@ -599,6 +605,10 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 #endif /*OPLUS_FEATURE_IOMONITOR*/
 #ifdef CONFIG_KSU
 	if (unlikely(ksu_vfs_read_hook)) 
+		ksu_handle_sys_read(fd, &buf, &count);
+#endif
+#ifdef CONFIG_KSU_SUSFS
+	if (unlikely(ksu_vfs_read_hook))
 		ksu_handle_sys_read(fd, &buf, &count);
 #endif
 	if (f.file) {
