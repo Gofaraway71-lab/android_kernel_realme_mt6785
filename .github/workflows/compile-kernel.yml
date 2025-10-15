@@ -1,0 +1,174 @@
+name: Compile RM6785 Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      note:
+        description: "Custom note for this build (will appear in Telegram message)"
+        required: false
+        default: "No note provided"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      ARCH: arm64
+      LC_ALL: C
+      USE_CCACHE: 1
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      CLANG_REPO: "https://gitlab.com/crdroidandroid/android_prebuilts_clang_host_linux-x86_clang-r547379.git"
+      ANYKERNEL_REPO: "https://github.com/elohim-etz/AK3.git"
+      ANYKERNEL_BRANCH: "mikuchan"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up build environment
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential bc bison flex \
+            libssl-dev gcc clang lld libncurses5-dev git zip curl time
+
+      - name: Clone Clang toolchain
+        run: |
+          if [ ! -d "clang" ]; then
+            echo "Cloning Clang..."
+            git clone --depth=1 "$CLANG_REPO" clang
+          else
+            echo "Clang already exists, skipping clone."
+          fi
+
+      - name: Build Kernel
+        id: build_kernel
+        run: |
+          set -e
+          echo "Starting kernel build..."
+          start_time=$(date +%s)
+
+          mkdir -p out
+          make O=out ARCH=${ARCH} RM6785_defconfig
+
+          # Capture logs
+          PATH="${PWD}/clang/bin:${PATH}" \
+          make -j$(nproc) O=out \
+              CC="clang" \
+              LLVM=1 \
+              CONFIG_NO_ERROR_ON_MISMATCH=y \
+              > >(tee build.log) 2> >(tee error.log >&2)
+
+          end_time=$(date +%s)
+          build_duration=$((end_time - start_time))
+          echo "BUILD_DURATION=${build_duration}" >> $GITHUB_ENV
+          echo "Build finished in ${build_duration}s."
+
+      - name: Check build output
+        id: check_output
+        run: |
+          if [ ! -f "out/arch/arm64/boot/Image.gz" ]; then
+            echo "Error: Image.gz not found! Build failed."
+            exit 1
+          fi
+
+      - name: Package with AnyKernel3
+        id: zip_kernel
+        run: |
+          echo "Zipping kernel..."
+          rm -rf AnyKernel
+          git clone --depth=1 "$ANYKERNEL_REPO" -b "$ANYKERNEL_BRANCH" AnyKernel
+          TANGGAL=$(date +"%Y%m%d-%H")
+          cp out/arch/arm64/boot/Image.gz AnyKernel/
+          cd AnyKernel
+          zip_name="Miku-RM6785-${TANGGAL}.zip"
+          zip -r9 "$zip_name" * > /dev/null
+          echo "ZIP_NAME=$zip_name" >> $GITHUB_ENV
+          echo "KERNEL_ZIP=$(pwd)/$zip_name" >> $GITHUB_ENV
+          cd ..
+
+      - name: Merge logs for Telegram
+        if: always()
+        run: |
+          echo "Merging build logs..."
+          {
+            echo "===== BUILD LOG ====="
+            cat build.log || echo "No build log found."
+            echo ""
+            echo "===== ERROR LOG ====="
+            cat error.log || echo "No error log found."
+          } > logs.txt
+          echo "COMBINED_LOG=logs.txt" >> $GITHUB_ENV
+
+      - name: Send Success Report to Telegram
+        if: success()
+        run: |
+          duration_min=$((BUILD_DURATION / 60))
+          duration_sec=$((BUILD_DURATION % 60))
+          branch="${{ github.ref_name }}"
+          commit_msg="$(git log -1 --pretty=%B | head -1)"
+          job_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          note="${{ github.event.inputs.note }}"
+
+          # Escape special characters for JSON
+          commit_msg_escaped=$(echo "$commit_msg" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n')
+          note_escaped=$(echo "$note" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+          # Build caption with proper escaping
+          caption="✅ *Kernel Build Successful!*\n\n*Device:* RM6785\n*Branch:* ${branch}\n*Commit:* ${commit_msg_escaped}\n*Compilation Time:* ${duration_min}m ${duration_sec}s\n\n📝 *Note:* ${note_escaped}\n\n_Job:_ [View Logs](${job_url})"
+
+          # Create media JSON
+          media_json='[
+            {
+              "type": "document",
+              "media": "attach://kernelzip",
+              "caption": "'"${caption}"'",
+              "parse_mode": "Markdown"
+            },
+            {
+              "type": "document",
+              "media": "attach://combinedlog",
+              "caption": "🧾 *Build + Error Logs*",
+              "parse_mode": "Markdown"
+            }
+          ]'
+
+          # Send media group
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMediaGroup" \
+            -F chat_id="${TELEGRAM_CHAT_ID}" \
+            -F media="${media_json}" \
+            -F kernelzip=@"${KERNEL_ZIP}" \
+            -F combinedlog=@"${COMBINED_LOG}"
+
+      - name: Send Failure Report to Telegram
+        if: failure()
+        run: |
+          branch="${{ github.ref_name }}"
+          commit_msg="$(git log -1 --pretty=%B | head -1)"
+          job_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          note="${{ github.event.inputs.note }}"
+
+          # Escape special characters for JSON
+          commit_msg_escaped=$(echo "$commit_msg" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/g' | tr -d '\n')
+          note_escaped=$(echo "$note" | sed 's/\\/\\\\/g; s/"/\\"/g')
+
+          # Build caption
+          caption="❌ *Kernel Build Failed!*\n\n*Repo:* ${{ github.repository }}\n*Branch:* ${branch}\n*Commit:* ${commit_msg_escaped}\n\n📝 *Note:* ${note_escaped}\n\n_Job:_ [View Logs](${job_url})"
+
+          # Create media JSON
+          media_json='[
+            {
+              "type": "document",
+              "media": "attach://combinedlog",
+              "caption": "'"${caption}"'",
+              "parse_mode": "Markdown"
+            }
+          ]'
+
+          # Send media group
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMediaGroup" \
+            -F chat_id="${TELEGRAM_CHAT_ID}" \
+            -F media="${media_json}" \
+            -F combinedlog=@"${COMBINED_LOG}"
