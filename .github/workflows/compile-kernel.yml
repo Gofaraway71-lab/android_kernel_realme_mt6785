@@ -43,6 +43,15 @@ jobs:
             echo "Clang already exists, skipping clone."
           fi
 
+      - name: Setup RKSU
+        run: |
+          if [ ! -d "KernelSU" ]; then
+            echo "Setting up rksu..."
+            curl -LSs "https://raw.githubusercontent.com/rsuntk/KernelSU/susfs-rksu-master/kernel/setup.sh" | bash -s susfs-rksu-master
+          else
+            echo "Skipping..."
+          fi
+
       - name: Build Kernel
         id: build_kernel
         run: |
