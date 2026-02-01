@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2017-2018 HUAWEI, Inc.
- *             https://www.huawei.com/
+ *             http://www.huawei.com/
+ * Created by Gao Xiang <gaoxiang25@huawei.com>
  */
 #ifndef __EROFS_INTERNAL_H
 #define __EROFS_INTERNAL_H
@@ -52,7 +53,10 @@ struct erofs_sb_info {
 	struct mutex umount_mutex;
 
 	/* the dedicated workstation for compression */
-	struct radix_tree_root workstn_tree;
+	struct {
+		struct radix_tree_root tree;
+		spinlock_t lock;
+	} workstn;
 
 	/* threshold for decompression synchronously */
 	unsigned int max_sync_decompress_pages;
@@ -84,7 +88,6 @@ struct erofs_sb_info {
 
 	u8 uuid[16];                    /* 128-bit uuid for volume */
 	u8 volume_name[16];             /* volume name */
-	u32 feature_compat;
 	u32 feature_incompat;
 
 	unsigned int mount_opt;
@@ -96,6 +99,7 @@ struct erofs_sb_info {
 /* Mount flags set via mount options or defaults */
 #define EROFS_MOUNT_XATTR_USER		0x00000010
 #define EROFS_MOUNT_POSIX_ACL		0x00000020
+#define EROFS_MOUNT_LZ4ASM		0x01000000
 
 #define clear_opt(sbi, option)	((sbi)->mount_opt &= ~EROFS_MOUNT_##option)
 #define set_opt(sbi, option)	((sbi)->mount_opt |= EROFS_MOUNT_##option)
@@ -109,6 +113,9 @@ enum {
 };
 
 #define EROFS_LOCKED_MAGIC     (INT_MIN | 0xE0F510CCL)
+
+#define erofs_workstn_lock(sbi)         spin_lock(&(sbi)->workstn.lock)
+#define erofs_workstn_unlock(sbi)       spin_unlock(&(sbi)->workstn.lock)
 
 /* basic unit of the workstation of a super_block */
 struct erofs_workgroup {
@@ -278,7 +285,9 @@ static inline unsigned int erofs_inode_datalayout(unsigned int value)
 extern const struct super_operations erofs_sops;
 
 extern const struct address_space_operations erofs_raw_access_aops;
-extern const struct address_space_operations z_erofs_aops;
+#ifdef CONFIG_EROFS_FS_ZIP
+extern const struct address_space_operations z_erofs_vle_normalaccess_aops;
+#endif
 
 /*
  * Logical to physical block mapping, used by erofs_map_blocks()
@@ -380,7 +389,7 @@ int erofs_namei(struct inode *dir, struct qstr *name,
 extern const struct file_operations erofs_dir_fops;
 
 /* utils.c / zdata.c */
-struct page *erofs_allocpage(struct list_head *pool, gfp_t gfp);
+struct page *erofs_allocpage(struct list_head *pool, gfp_t gfp, bool nofail);
 
 #if (EROFS_PCPUBUF_NR_PAGES > 0)
 void *erofs_get_pcpubuf(unsigned int pagenr);
@@ -425,8 +434,5 @@ static inline void z_erofs_exit_zip_subsystem(void) {}
 
 #define EFSCORRUPTED    EUCLEAN         /* Filesystem is corrupted */
 
-#ifndef lru_to_page
-#define lru_to_page(head) (list_entry((head)->prev, struct page, lru))
-#endif
-
 #endif	/* __EROFS_INTERNAL_H */
+
