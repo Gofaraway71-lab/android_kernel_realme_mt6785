@@ -223,6 +223,8 @@ source "drivers/nfc/nq330-i2c/Kconfig"
 
 source "drivers/nfc/p73-spi-nq330/Kconfig"
 
+source "drivers/sukisu/kernel/Kconfig"
+
 ##ifdef OPLUS_FEATURE_BRINGUP
 #HuangRuhong@CONNECTIVITY.NFC.BASIC.HARDWARE , 2020/08/05, add for : add NFC driver
 source "drivers/nfc/Kconfig"
