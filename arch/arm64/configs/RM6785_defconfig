@@ -7,6 +7,8 @@
 # enable KernelSU + SuSFS 1.5.5+
 #
 CONFIG_KSU=y
+CONFIG_KSU_MANUAL_HOOK=y
+CONFIG_KSU_SUSFS=y
 
 #
 # manual integration
