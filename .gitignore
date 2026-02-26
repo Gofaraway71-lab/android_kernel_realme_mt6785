@@ -20,6 +20,7 @@
 *.elf
 *.gcno
 *.gz
+*.orig
 *.i
 *.ko
 *.ll
